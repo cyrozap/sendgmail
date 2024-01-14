@@ -30,7 +30,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/smtp"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,6 +39,8 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/authhandler"
 	googleOAuth2 "golang.org/x/oauth2/google"
+	"google.golang.org/api/gmail/v1"
+	"google.golang.org/api/option"
 )
 
 var (
@@ -83,7 +84,7 @@ func configJSON() []byte {
 }
 
 func getConfig() *oauth2.Config {
-	config, err := googleOAuth2.ConfigFromJSON(configJSON(), "https://mail.google.com/")
+	config, err := googleOAuth2.ConfigFromJSON(configJSON(), "https://www.googleapis.com/auth/gmail.send")
 	if err != nil {
 		log.Fatalf("Failed to parse config: %v.", err)
 	}
@@ -136,45 +137,36 @@ func sendMessage(config *oauth2.Config) {
 		log.Fatalf("Failed to open token file for reading: %v.", err)
 	}
 	defer tokenFile.Close()
+
 	var token oauth2.Token
 	if err := json.NewDecoder(tokenFile).Decode(&token); err != nil {
 		log.Fatalf("Failed to read token: %v.", err)
 	}
-	tokenSource := config.TokenSource(context.Background(), &token)
+
+	ctx := context.Background()
+	tokenSource := config.TokenSource(ctx, &token)
+
 	message, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		log.Fatalf("Failed to read message: %v.", err)
 	}
-	if err := smtp.SendMail("smtp.gmail.com:587", authWith(tokenSource), sender, flag.Args(), message); err != nil {
+
+	gmailService, err := gmail.NewService(ctx, option.WithTokenSource(tokenSource))
+	if err != nil {
+		log.Fatalf("Failed to create gmail service: %v.", err)
+	}
+
+	_, err = gmailService.Users.Messages.
+		Send(
+			"me",
+			&gmail.Message{
+				Raw: base64.StdEncoding.EncodeToString(message),
+			},
+		).
+		Do()
+	if err != nil {
 		log.Fatalf("Failed to send message: %v.", err)
 	}
-}
-
-func authWith(tokenSource oauth2.TokenSource) *auth {
-	return &auth{ts: tokenSource}
-}
-
-type auth struct {
-	ts oauth2.TokenSource
-}
-
-func (a *auth) Start(serverInfo *smtp.ServerInfo) (string, []byte, error) {
-	if !serverInfo.TLS {
-		return "", nil, fmt.Errorf("unencrypted connection: %v", serverInfo)
-	}
-	token, err := a.ts.Token()
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to get token: %v", err)
-	}
-	toServer := fmt.Sprintf("user=%v\001auth=%v %v\001\001", sender, token.Type(), token.AccessToken)
-	return "XOAUTH2", []byte(toServer), nil
-}
-
-func (a *auth) Next(fromServer []byte, more bool) ([]byte, error) {
-	if more {
-		return nil, fmt.Errorf("unexpected challenge: %v", string(fromServer))
-	}
-	return nil, nil
 }
 
 func userConfigDir() string {

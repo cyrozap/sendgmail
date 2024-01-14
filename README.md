@@ -3,6 +3,21 @@
 sendgmail is a tool that uses Gmail in order to mimic `sendmail` for `git
 send-email`.
 
+This tool has been modified from its original version. This new version,
+inspired by [siketyan/sendgmail](https://github.com/siketyan/sendgmail), uses
+the Gmail [users.messages.send API](https://developers.google.com/gmail/api/reference/rest/v1/users.messages/send)
+instead of SMTP to send the email. This has the following benefits:
+
+*   The scope of the OAuth token can be limited to only sending emails. This
+    avoids the potential danger created by generating a token with full Gmail
+    permissions, which is necessary to send emails through Gmail using SMTP
+    (when not using an app password, which grants even more permissions).
+
+*   Sent emails will always appear in the "Sent" folder in Gmail regardless of
+    whether or not you CC yourself. In contrast, when a message is sent via
+    SMTP, the message will not appear in the "Sent" folder unless you CC
+    yourself.
+
 ## Obtaining OAuth2 credentials for sendgmail
 
 1.  Go to the [Google Cloud console](https://console.cloud.google.com/).
@@ -40,8 +55,8 @@ send-email`.
     *   Add `USERNAME@gmail.com` as a test user. This is necessary for using the
         project that you created.
 
-    *   Add `https://mail.google.com/` as a scope. This is necessary for using
-        Gmail via SMTP.
+    *   Add `https://www.googleapis.com/auth/gmail.send` as a scope. This is
+        necessary for sending emails via the Gmail API.
 
 ## Installing sendgmail
 
@@ -49,7 +64,7 @@ Run the following command to build and install sendgmail to
 `GOPATH/bin/sendgmail`:
 
 ```shell
-go install github.com/google/gmail-oauth2-tools/go/sendgmail@latest
+go install github.com/cyrozap/sendgmail@latest
 ```
 
 ## Obtaining OAuth2 credentials for yourself
