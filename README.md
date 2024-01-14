@@ -6,7 +6,7 @@ send-email`.
 This tool has been modified from its [original version](https://github.com/google/gmail-oauth2-tools/tree/578a11a744c37bd19c1c1b8d96061276dbf6f7f0/go/sendgmail).
 This new version, inspired by [siketyan/sendgmail](https://github.com/siketyan/sendgmail),
 uses the Gmail [users.messages.send API](https://developers.google.com/gmail/api/reference/rest/v1/users.messages/send)
-instead of SMTP to send the email. This has the following benefits:
+instead of SMTP to send the email. This has the following advantages:
 
 *   The scope of the OAuth token can be limited to only sending emails. This
     avoids the potential danger created by generating a token with full Gmail
