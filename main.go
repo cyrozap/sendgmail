@@ -30,10 +30,14 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/oauth2"
@@ -93,19 +97,82 @@ func getConfig() *oauth2.Config {
 
 func setUpToken(config *oauth2.Config) {
 	state := uuid.NewString()
+
+	// Parse RedirectURL to determine if it's a local redirect
+	u, err := url.Parse(config.RedirectURL)
+	if err != nil {
+		log.Fatalf("Failed to parse redirect_uris[0]: %v", err)
+	}
+
+	// Extract the host and port
+	host, port, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		// If no port is specified, assume default port 80
+		host = u.Host
+		port = "80"
+	}
+
+	// Check if host is localhost or loopback IP
+	local := false
+	ip := net.ParseIP(host)
+	if ip != nil && ip.IsLoopback() {
+		local = true
+	} else if host == "localhost" {
+		local = true
+	}
+
+	server := &http.Server{Addr: net.JoinHostPort(host, port)}
+
+	codeChan := make(chan string)
+
+	callbackPath := u.Path
+	if callbackPath == "" {
+		callbackPath = "/"
+	}
+
+	http.HandleFunc(callbackPath, func(w http.ResponseWriter, r *http.Request) {
+		code := r.URL.Query().Get("code")
+		if code != "" {
+			codeChan <- code
+			fmt.Fprintf(w, "Authorisation code received. You can close this window.")
+			go func() {
+				time.Sleep(1 * time.Second)
+				server.Shutdown(context.Background())
+			}()
+		} else {
+			http.Error(w, "No code received", http.StatusBadRequest)
+		}
+	})
+
 	authHandler := func(authCodeURL string) (string, string, error) {
 		fmt.Println()
 		fmt.Println("1. Ensure that you are logged in as", sender, "in your browser.")
 		fmt.Println()
+
+		if local {
+			go func() {
+				if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					log.Fatalf("Failed to start server: %v.", err)
+				}
+			}()
+		}
+
 		fmt.Println("2. Open the following link and authorise sendgmail:")
 		fmt.Println(authCodeURL + "&access_type=offline&prompt=consent") // hack to obtain a refresh token
-		fmt.Println()
-		fmt.Println("3. Enter the authorisation code:")
+
 		var code string
-		if _, err := fmt.Scan(&code); err != nil {
-			log.Fatalf("Failed to read authorisation code: %v.", err)
+		if local {
+			code = <-codeChan
+		} else {
+			fmt.Println()
+			fmt.Println("3. Enter the authorisation code:")
+			if _, err := fmt.Scan(&code); err != nil {
+				log.Fatalf("Failed to read authorisation code: %v.", err)
+			}
 		}
+
 		fmt.Println()
+
 		return code, state, nil
 	}
 	verifier := uuid.NewString()

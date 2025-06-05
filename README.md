@@ -37,8 +37,19 @@ instead of SMTP to send the email. This has the following advantages:
     *   Follow the steps in the **Authorize credentials for a desktop
         application** section. However, set the application type to *Web
         application* (i.e. instead of *Desktop app*) and then add
+        `http://localhost:8080/oauth2callback` as the authorised redirect URI.
+
+        Using that URI will enable the local callback server in `sendgmail`,
+        which will save you from having to copy and paste the authorisation
+        code. If you can't use port 8080, you can set the port to any other
+        value so long as `sendgmail -setup` can listen on it. You can also set a
+        loopback IP (like `127.0.0.1` or `[::1]`) as the host instead of
+        `localhost`, if you prefer.
+
+        If you need to run `sendgmail -setup` on a different computer from the
+        one that your browser is on, set
         `https://google.github.io/gmail-oauth2-tools/html/oauth2.dance.html` as
-        an authorised redirect URI. This is necessary for seeing the
+        the authorised redirect URI. This is necessary for seeing the
         authorisation code on a page in your browser.
 
     *   When you download the credentials as JSON, create the
