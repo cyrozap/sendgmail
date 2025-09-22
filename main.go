@@ -30,6 +30,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
+	"mime/quotedprintable"
 	"net"
 	"net/http"
 	"net/url"
@@ -38,6 +40,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"golang.org/x/oauth2"
@@ -198,6 +201,156 @@ func setUpToken(config *oauth2.Config) {
 	}
 }
 
+// checkLines checks if the body of a message contains lines that are likely to be
+// mangled by Gmail. It returns true if mangling is likely, false otherwise.
+// Mangling is considered likely if a line is longer than lineLengthLimit, and a
+// word on that line starts at or after columnIndexTrigger and crosses the
+// lineLengthLimit. This is a heuristic based on observed Gmail behavior.
+func checkLines(body string) bool {
+	const lineLengthLimit = 78
+	const columnIndexTrigger = 16
+
+	bodyLines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
+
+	for _, line := range bodyLines {
+		runes := []rune(line)
+		if len(runes) <= lineLengthLimit {
+			continue
+		}
+
+		inWord := false
+		wordStart := -1
+		for i, r := range runes {
+			if !unicode.IsSpace(r) {
+				if !inWord {
+					inWord = true
+					wordStart = i
+				}
+			} else { // is space
+				if inWord {
+					inWord = false
+					// Word ended at i-1. wordEnd is exclusive index i.
+					wordEnd := i
+					if wordEnd > lineLengthLimit && wordStart >= columnIndexTrigger {
+						return true
+					}
+				}
+			}
+		}
+		// Handle word at end of line
+		if inWord {
+			wordEnd := len(runes)
+			if wordEnd > lineLengthLimit && wordStart >= columnIndexTrigger {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// decodeBody decodes the message body based on the provided transferEncoding.
+// It supports "quoted-printable" and "base64" encodings. If decoding fails
+// or the encoding is unsupported, it logs a fatal error.
+func decodeBody(body, transferEncoding string) string {
+	if strings.EqualFold(transferEncoding, "quoted-printable") {
+		qpr, err := io.ReadAll(quotedprintable.NewReader(strings.NewReader(body)))
+		if err != nil {
+			log.Fatalf("Failed to decode quoted-printable body: %v.", err)
+		}
+		return string(qpr)
+	} else if strings.EqualFold(transferEncoding, "base64") {
+		decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(body))
+		decodedBytes, err := io.ReadAll(decoder)
+		if err != nil {
+			log.Fatalf("Failed to decode base64 body: %v.", err)
+		}
+		return string(decodedBytes)
+	} else if transferEncoding == "" ||
+		strings.EqualFold(transferEncoding, "7bit") ||
+		strings.EqualFold(transferEncoding, "8bit") {
+		return body
+	}
+	log.Fatalf("Unsupported Content-Transfer-Encoding: %q", transferEncoding)
+	return "" // Unreachable
+}
+
+// checkMessageBody analyzes an email message to determine if it is likely to be
+// mangled by Gmail. It specifically checks for long lines in text/plain
+// messages that can be reformatted by Gmail, breaking patches. If such a
+// message is detected, it logs a fatal error.
+func checkMessageBody(message []byte) {
+	msgStr := string(message)
+	separator := "\n\n"
+	headerEnd := strings.Index(msgStr, separator)
+	if headerEnd == -1 {
+		separator = "\r\n\r\n"
+		headerEnd = strings.Index(msgStr, separator)
+	}
+
+	var headerPart string
+	lineEnding := "\n"
+
+	if headerEnd != -1 {
+		headerPart = msgStr[:headerEnd]
+		if strings.Contains(headerPart, "\r\n") {
+			lineEnding = "\r\n"
+		}
+	} else {
+		// No separator means the entire message is headers with no body.
+		// This can be the case for a cover letter from git send-email.
+		headerPart = msgStr
+		if strings.Contains(headerPart, "\r\n") {
+			lineEnding = "\r\n"
+		}
+	}
+
+	lines := strings.Split(headerPart, lineEnding)
+	contentTypeFound := false
+	transferEncoding := ""
+
+	var contentTypeValue string
+
+	for _, line := range lines {
+		if len(line) > len("Content-Type:") && strings.EqualFold(line[:len("Content-Type:")], "Content-Type:") {
+			if !contentTypeFound { // only find first
+				contentTypeFound = true
+				contentTypeValue = strings.TrimSpace(line[len("Content-Type:"):])
+			}
+		} else if len(line) > len("Content-Transfer-Encoding:") && strings.EqualFold(line[:len("Content-Transfer-Encoding:")], "Content-Transfer-Encoding:") {
+			if transferEncoding == "" { // only find first
+				transferEncoding = strings.TrimSpace(line[len("Content-Transfer-Encoding:"):])
+			}
+		}
+	}
+
+	isTextPlain := false
+	if contentTypeFound {
+		mediaType, _, err := mime.ParseMediaType(contentTypeValue)
+		if err == nil && mediaType == "text/plain" {
+			isTextPlain = true
+		}
+	} else {
+		// No content type header implies text/plain.
+		isTextPlain = true
+	}
+
+	if !isTextPlain {
+		// If the message isn't text/plain, then we don't care since Gmail won't mangle non-plaintext messages.
+		return
+	}
+
+	var bodyOnly string
+	if headerEnd != -1 {
+		bodyOnly = msgStr[headerEnd+len(separator):]
+	}
+
+	decodedBody := decodeBody(bodyOnly, transferEncoding)
+	willBeMangled := checkLines(decodedBody)
+	if willBeMangled {
+		log.Fatalf("sendgmail has detected that this message is likely to be mangled by Gmail. To send this message, please use SMTP instead.")
+	}
+}
+
 func sendMessage(config *oauth2.Config) {
 	tokenFile, err := os.Open(tokenPath())
 	if err != nil {
@@ -217,6 +370,8 @@ func sendMessage(config *oauth2.Config) {
 	if err != nil {
 		log.Fatalf("Failed to read message: %v.", err)
 	}
+
+	checkMessageBody(message)
 
 	gmailService, err := gmail.NewService(ctx, option.WithTokenSource(tokenSource))
 	if err != nil {
