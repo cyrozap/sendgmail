@@ -227,7 +227,7 @@ func sendMessage(config *oauth2.Config) {
 		Send(
 			"me",
 			&gmail.Message{
-				Raw: base64.StdEncoding.EncodeToString(message),
+				Raw: base64.URLEncoding.EncodeToString(message),
 			},
 		).
 		Do()
