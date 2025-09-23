@@ -12,6 +12,11 @@ This has the following advantages:
 * Sent emails will always appear in the "Sent" folder in Gmail regardless of whether or not you CC yourself.
   In contrast, when a message is sent via SMTP, the message will not appear in the "Sent" folder unless you CC yourself.
 
+> [!CAUTION]
+> Unfortunately, it seems that sending patches via the Gmail API has some of the same limitations as sending via the Web UI.
+> Namely, that some patches will get mangled by Gmail's insistence on line-wrapping certain long lines in plaintext emails.
+> To avoid sending corrupted patches to public mailing lists, `sendgmail` automatically detects patches that are likely to be mangled by Gmail and will refuse to send them.
+
 
 ## Getting Started
 
